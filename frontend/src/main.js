@@ -31,6 +31,7 @@ let windows = [];  // { id, wallId, posT, winWidth, winHeight, sillHeight, group
 let doors = [];    // { id, wallId, posT, doorWidth, doorHeight, door }
 let wallIdCounter = 0, winIdCounter = 0, doorIdCounter = 0;
 let selectedWin = null;
+let _activeView = '3d'; // tracks '3d' | '2d' — used to auto-refresh masks on image change
 
 // Selection state
 let selectedObject = null; // currently selected THREE.Object3D
@@ -864,15 +865,44 @@ function wireButtons() {
   });
 }
 
+// ─── 2D mask refresh helper ───────────────────────────────────────────────────
 /**
- * Switch between 3D viewport and 2D masks panel
+ * Fetches and displays 2D analysis masks for the given image name.
+ * Called both by switchView('2d') and by loadFloorPlan when already in 2D mode.
+ */
+async function refresh2DMasks(imageName) {
+  try {
+    showLoading('Fetching 2D Analysis Masks…');
+    const masks = await fetch2DMasks(imageName);
+
+    const setMask = (id, src) => {
+      const el = document.getElementById(id);
+      if (el) el.src = src || '';
+    };
+
+    setMask('mask-original', masks.original);
+    setMask('mask-walls',    masks.walls);
+    setMask('mask-gates',    masks.gates);
+    setMask('mask-windows',  masks.windows);
+  } catch (err) {
+    console.error('[2DView] Failed to load masks:', err);
+    setStatus(`Failed to load 2D masks: ${err.message}`);
+  } finally {
+    hideLoading();
+  }
+}
+
+/**
+ * Switch between 3D viewport and 2D masks panel.
  */
 async function switchView(mode) {
   const btn3d = document.getElementById('view-3d-btn');
   const btn2d = document.getElementById('view-2d-btn');
   const canvas = document.getElementById('canvas-container');
   const panel2d = document.getElementById('2d-panel');
-  
+
+  _activeView = mode;
+
   if (mode === '3d') {
     btn3d?.classList.add('active');
     btn2d?.classList.remove('active');
@@ -883,30 +913,11 @@ async function switchView(mode) {
     btn2d?.classList.add('active');
     canvas.style.display = 'none';
     panel2d.style.display = 'block';
-    
-    // Load masks if we have a current image
+
+    // Always use the current dropdown value so we fetch the right image
     const sel = document.getElementById('image-select');
-    const currentImg = sel ? sel.value : 'F3.png';
-    try {
-      showLoading('Fetching 2D Analysis Masks…');
-      const masks = await fetch2DMasks(currentImg);
-      
-      const setMask = (id, src) => {
-        const el = document.getElementById(id);
-        if (el) el.src = src || '';
-      };
-      
-      setMask('mask-original', masks.original);
-      setMask('mask-walls',    masks.walls);
-      setMask('mask-gates',    masks.gates);
-      setMask('mask-windows',  masks.windows);
-      
-    } catch (err) {
-      console.error('[2DView] Failed to load masks:', err);
-      setStatus(`Failed to load 2D masks: ${err.message}`);
-    } finally {
-      hideLoading();
-    }
+    const currentImg = sel?.value || 'F3.png';
+    await refresh2DMasks(currentImg);
   }
 }
 
@@ -1053,6 +1064,12 @@ async function loadFloorPlan(imageName) {
     setError(`Backend error: ${err.message}. Is the Flask server running on port 5000?`);
   } finally {
     hideLoading();
+  }
+
+  // ── If the 2D panel is currently visible, refresh its masks for the new image ──
+  // This fixes the bug where changing images while in 2D mode showed stale masks.
+  if (_activeView === '2d') {
+    await refresh2DMasks(imageName);
   }
 }
 

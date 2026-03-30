@@ -30,33 +30,49 @@ def detect_walls(image_path):
         # We sort by length so we process main walls first
         raw_lines.sort(key=lambda l: (l[2]-l[0])**2 + (l[3]-l[1])**2, reverse=True)
 
+        TRACK_TOL = 15  # px: wall-thickness tolerance (same track?)
+        GAP_TOL   = 8   # px: max gap between endpoints to still merge
+        # NOTE: old code used GAP_TOL=20 which merged collinear but separate walls
+        # in U/L/T shapes — reduced to 8px to prevent that.
+
         while len(raw_lines) > 0:
             l1 = raw_lines.pop(0)
             x1, y1, x2, y2 = l1
-            
-            # Force Orthogonality (Snap to 90 degrees)
+
+            # Force Orthogonality (Snap to 90 degrees) + normalise endpoints
             is_h = abs(y1 - y2) < abs(x1 - x2)
-            if is_h: y2 = y1
-            else: x2 = x1
-            
+            if is_h:
+                y2 = y1
+                if x1 > x2: x1, x2 = x2, x1  # ensure x1 <= x2
+            else:
+                x2 = x1
+                if y1 > y2: y1, y2 = y2, y1  # ensure y1 <= y2
+
             keep = True
             for i in range(len(merged_lines)):
                 mx1, my1, mx2, my2 = merged_lines[i]
                 m_is_h = abs(my1 - my2) < abs(mx1 - mx2)
-                
-                if is_h == m_is_h:
-                    # Check proximity (Same track?)
-                    dist = abs(y1 - my1) if is_h else abs(x1 - mx1)
-                    if dist < 15: # Wall thickness tolerance
-                        # Check for overlap or end-to-end proximity
-                        if is_h:
-                            if max(x1, x2) >= min(mx1, mx2)-20 and min(x1, x2) <= max(mx1, mx2)+20:
-                                merged_lines[i] = [min(x1, x2, mx1, mx2), my1, max(x1, x2, mx1, mx2), my1]
-                                keep = False; break
-                        else:
-                            if max(y1, y2) >= min(my1, my2)-20 and min(y1, y2) <= max(my1, my2)+20:
-                                merged_lines[i] = [mx1, min(y1, y2, my1, my2), mx1, max(y1, y2, my1, my2)]
-                                keep = False; break
+
+                if is_h != m_is_h:
+                    continue  # different orientation
+
+                if is_h:
+                    # Same direction: check they share the same Y track
+                    if abs(y1 - my1) >= TRACK_TOL:
+                        continue
+                    lo_m, hi_m = min(mx1, mx2), max(mx1, mx2)
+                    # Only merge if genuinely overlapping or touching within GAP_TOL
+                    if x1 <= hi_m + GAP_TOL and x2 >= lo_m - GAP_TOL:
+                        merged_lines[i] = [min(lo_m, x1), my1, max(hi_m, x2), my1]
+                        keep = False; break
+                else:
+                    if abs(x1 - mx1) >= TRACK_TOL:
+                        continue
+                    lo_m, hi_m = min(my1, my2), max(my1, my2)
+                    if y1 <= hi_m + GAP_TOL and y2 >= lo_m - GAP_TOL:
+                        merged_lines[i] = [mx1, min(lo_m, y1), mx1, max(hi_m, y2)]
+                        keep = False; break
+
             if keep: merged_lines.append([x1, y1, x2, y2])
 
         # 4. FORMAT INTO JSON LIST

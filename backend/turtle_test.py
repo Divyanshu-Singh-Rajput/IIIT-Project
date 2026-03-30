@@ -23,7 +23,7 @@ def get_wall_json(image_path):
 
     # 3. DETECT LINES
     lines = cv2.HoughLinesP(skeleton, 1, np.pi/180, threshold=20, 
-                            minLineLength=20, maxLineGap=15)
+                            minLineLength=10, maxLineGap=15)
     
     if lines is None:
         return {"project_name": "Empty Plan", "walls": []}
@@ -32,32 +32,59 @@ def get_wall_json(image_path):
     master_walls = []
 
     # 4. SNAP & MERGE (Remove double lines and segments)
+    # Only merge segments that are on the SAME axis-track (within TRACK_TOL pixels)
+    # AND genuinely overlapping or very close (within GAP_TOL pixels).
+    # Using a tight GAP_TOL prevents merging separate collinear segments that
+    # belong to different sides of U/L/T shapes.
+    TRACK_TOL = 5   # px: how close two parallel lines must be on their shared axis
+    GAP_TOL   = 8   # px: maximum gap between segment ends to still merge them
+
     while len(raw_lines) > 0:
         l1 = raw_lines.pop(0)
         x1, y1, x2, y2 = l1
         is_h = abs(y1 - y2) < abs(x1 - x2)
-        
+
         # Snap to 90 degrees
-        if is_h: y2 = y1
-        else: x2 = x1
-        
+        if is_h:
+            y2 = y1  # force same Y
+            # Normalise so x1 <= x2
+            if x1 > x2: x1, x2 = x2, x1
+        else:
+            x2 = x1  # force same X
+            # Normalise so y1 <= y2
+            if y1 > y2: y1, y2 = y2, y1
+
         merged = False
         for i in range(len(master_walls)):
             mx1, my1, mx2, my2 = master_walls[i]
             m_is_h = abs(my1 - my2) < abs(mx1 - mx2)
-            
-            if is_h == m_is_h:
-                dist = abs(y1 - my1) if is_h else abs(x1 - mx1)
-                # If on same track and overlapping/near
-                if dist < 12: 
-                    if is_h:
-                        if max(x1, x2) >= min(mx1, mx2) - 25 and min(x1, x2) <= max(mx1, mx2) + 25:
-                            master_walls[i] = [min(x1, x2, mx1, mx2), my1, max(x1, x2, mx1, mx2), my1]
-                            merged = True; break
-                    else:
-                        if max(y1, y2) >= min(my1, my2) - 25 and min(y1, y2) <= max(my1, my2) + 25:
-                            master_walls[i] = [mx1, min(y1, y2, my1, my2), mx1, max(y1, y2, my1, my2)]
-                            merged = True; break
+
+            if is_h != m_is_h:
+                continue  # different orientation
+
+            if is_h:
+                # Both horizontal: must share nearly the same Y
+                if abs(y1 - my1) > TRACK_TOL:
+                    continue
+                # Normalise master coords
+                lo_m, hi_m = min(mx1, mx2), max(mx1, mx2)
+                lo_n, hi_n = x1, x2
+                # Only merge if the segments overlap or touch within GAP_TOL
+                if lo_n <= hi_m + GAP_TOL and hi_n >= lo_m - GAP_TOL:
+                    master_walls[i] = [min(lo_m, lo_n), my1, max(hi_m, hi_n), my1]
+                    merged = True
+                    break
+            else:
+                # Both vertical: must share nearly the same X
+                if abs(x1 - mx1) > TRACK_TOL:
+                    continue
+                lo_m, hi_m = min(my1, my2), max(my1, my2)
+                lo_n, hi_n = y1, y2
+                if lo_n <= hi_m + GAP_TOL and hi_n >= lo_m - GAP_TOL:
+                    master_walls[i] = [mx1, min(lo_m, lo_n), mx1, max(hi_m, hi_n)]
+                    merged = True
+                    break
+
         if not merged:
             master_walls.append([x1, y1, x2, y2])
 
@@ -66,7 +93,7 @@ def get_wall_json(image_path):
     # visible gaps in the 3D model. This pass snaps nearby endpoints to the same
     # coordinate so every corner is perfectly shared.
 
-    CORNER_SNAP = 18  # px – if two endpoints are closer than this, merge them
+    CORNER_SNAP = 10  # px – if two endpoints are closer than this, merge them
 
     def _endpoints(wall):
         x1, y1, x2, y2 = wall
@@ -122,7 +149,9 @@ def get_wall_json(image_path):
         main_cnt = max(outer_cnts, key=cv2.contourArea)
         # Approximate to a polygon — epsilon tuned for architectural drawings
         peri    = cv2.arcLength(main_cnt, True)
-        epsilon = 0.01 * peri
+        # Use a tight epsilon so concave corners (U/L/T shapes) are preserved.
+        # 0.01 is too loose and collapses interior notches into straight edges.
+        epsilon = 0.005 * peri
         approx  = cv2.approxPolyDP(main_cnt, epsilon, True)
         pts     = [tuple(p[0]) for p in approx]
 
@@ -153,10 +182,16 @@ def get_wall_json(image_path):
             # For each outer edge, check whether an existing wall already covers
             # this segment (within tolerance). If not, add it so the perimeter
             # is always closed.
-            OUTER_SNAP = 12  # px tolerance for "same wall"
+            OUTER_SNAP = 6  # px tolerance for "same wall"
 
             def _covers(existing, edge):
-                """True if 'existing' is on the same axis-line and overlaps 'edge'."""
+                """True if 'existing' substantially covers 'edge' (same axis-line, overlapping).
+                
+                A wall only counts as 'covered' if it shares the same axis track AND
+                the existing segment overlaps at least 50% of the outer edge's length.
+                This prevents a long wall from suppressing a separate short parallel
+                segment that belongs to a different side of a U/L shape.
+                """
                 x1e, y1e, x2e, y2e = existing
                 x1n, y1n, x2n, y2n = edge
                 is_h_e = abs(y1e - y2e) < abs(x1e - x2e)
@@ -166,12 +201,20 @@ def get_wall_json(image_path):
                 if is_h_e:
                     if abs(y1e - y1n) > OUTER_SNAP:
                         return False
-                    # Overlap in X?
-                    return max(x1e, x2e) >= min(x1n, x2n) and min(x1e, x2e) <= max(x1n, x2n)
+                    # Overlap in X — require substantial coverage (80%)
+                    lo_e, hi_e = min(x1e, x2e), max(x1e, x2e)
+                    lo_n, hi_n = min(x1n, x2n), max(x1n, x2n)
+                    overlap = max(0, min(hi_e, hi_n) - max(lo_e, lo_n))
+                    edge_len = hi_n - lo_n
+                    return overlap >= edge_len * 0.8 if edge_len > 0 else True
                 else:
                     if abs(x1e - x1n) > OUTER_SNAP:
                         return False
-                    return max(y1e, y2e) >= min(y1n, y2n) and min(y1e, y2e) <= max(y1n, y2n)
+                    lo_e, hi_e = min(y1e, y2e), max(y1e, y2e)
+                    lo_n, hi_n = min(y1n, y2n), max(y1n, y2n)
+                    overlap = max(0, min(hi_e, hi_n) - max(lo_e, lo_n))
+                    edge_len = hi_n - lo_n
+                    return overlap >= edge_len * 0.8 if edge_len > 0 else True
 
             for edge in outer_edges:
                 covered = any(_covers(existing, edge) for existing in master_walls)

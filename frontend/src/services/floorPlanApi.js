@@ -81,8 +81,12 @@ function adaptWalls(data) {
     }
   });
 
-  const CORNER_SNAP = 30; // px
-  const T_SNAP = 45;
+  // CORNER_SNAP: max distance between two endpoints to be considered the same corner.
+  // Keep this tight — 30px was too large and merged endpoints across U-shape notches.
+  const CORNER_SNAP = 12; // px
+  // T_SNAP: max distance from an endpoint to another wall's axis to snap onto it.
+  // 45px was too aggressive — pulled inner wall ends onto parallel outer walls.
+  const T_SNAP = 20;
 
   const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
 
