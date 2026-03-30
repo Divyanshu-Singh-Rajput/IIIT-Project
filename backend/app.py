@@ -74,6 +74,55 @@ def get_data():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route('/api/masks')
+def get_masks():
+    """
+    Returns base64 encoded debug masks for 2D visualization.
+    """
+    import cv2
+    import base64
+    from t import detect_walls, detect_gates_robust
+    
+    def img_to_b64(img):
+        if img is None: return ""
+        # Handle binary masks by converting back to BGR for standard PNG saving if needed, 
+        # but imencode usually handles 1-channel uint8 just fine.
+        _, buffer = cv2.imencode('.png', img)
+        return "data:image/png;base64," + base64.b64encode(buffer).decode('utf-8')
+
+    try:
+        image_name = request.args.get('image', '')
+        image_path = get_image_path(image_name)
+
+        # Original Image
+        original = cv2.imread(image_path)
+        
+        # Walls
+        wall_mask, _ = detect_walls(image_path)
+        
+        # Gates
+        gate_mask, _ = detect_gates_robust(image_path)
+        
+        # Windows
+        win_mask, _ = detect_windows_json(image_path, headless=True, return_mask=True)
+
+        return jsonify({
+            "status": "success",
+            "image": os.path.basename(image_path),
+            "masks": {
+                "original": img_to_b64(original),
+                "walls": img_to_b64(wall_mask),
+                "windows": img_to_b64(win_mask),
+                "gates": img_to_b64(gate_mask)
+            }
+        })
+    except FileNotFoundError as e:
+        return jsonify({"status": "error", "message": str(e)}), 404
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 # ── Material scoring tables ───────────────────────────────────────────────────
 
 MATERIAL_DB = {

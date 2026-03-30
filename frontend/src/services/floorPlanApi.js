@@ -61,10 +61,110 @@ function snapToNearestWall(midX, midY, walls, maxDist = 30) {
  * Frontend: [{ start:{x,y}, end:{x,y} }]  (same structure, just the array)
  */
 function adaptWalls(data) {
-  return (data.walls || []).map(w => ({
+  let walls = (data.walls || []).map(w => ({
     start: { x: w.start.x, y: w.start.y },
     end: { x: w.end.x, y: w.end.y },
   }));
+
+  // 0. Orthogonal tag & enforce
+  walls.forEach(w => {
+    const dx = Math.abs(w.end.x - w.start.x);
+    const dy = Math.abs(w.end.y - w.start.y);
+    if (dx > dy) {
+      w.isHoriz = true;
+      const avgY = (w.start.y + w.end.y) / 2;
+      w.start.y = w.end.y = avgY;
+    } else {
+      w.isVert = true;
+      const avgX = (w.start.x + w.end.x) / 2;
+      w.start.x = w.end.x = avgX;
+    }
+  });
+
+  const CORNER_SNAP = 30; // px
+  const T_SNAP = 45;
+
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+
+  const pts = [];
+  walls.forEach(w => { 
+    w.start.wall = w; w.end.wall = w; 
+    pts.push(w.start); pts.push(w.end); 
+  });
+  
+  // 1. Orthogonal-Aware Corner Snap
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      if (dist(pts[i], pts[j]) < CORNER_SNAP) {
+        const w1 = pts[i].wall;
+        const w2 = pts[j].wall;
+
+        if (w1.isHoriz && w2.isVert) {
+          pts[i].x = pts[j].x = w2.start.x;
+          pts[i].y = pts[j].y = w1.start.y;
+        } else if (w1.isVert && w2.isHoriz) {
+          pts[i].x = pts[j].x = w1.start.x;
+          pts[i].y = pts[j].y = w2.start.y;
+        } else {
+          // Parallel or same orientation
+          if (w1.isHoriz) {
+            const avgX = (pts[i].x + pts[j].x) / 2;
+            pts[i].x = pts[j].x = avgX;
+          } else {
+            const avgY = (pts[i].y + pts[j].y) / 2;
+            pts[i].y = pts[j].y = avgY;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Orthogonal-Aware T-Junction Snap
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const wSelf = p.wall;
+    let bestDist = T_SNAP;
+    let snapTo = null;
+
+    walls.forEach(wOther => {
+      if (wSelf === wOther) return;
+
+      if (wSelf.isHoriz && wOther.isVert) {
+        const ix = wOther.start.x;
+        const iy = p.y;
+        const minY = Math.min(wOther.start.y, wOther.end.y) - 10;
+        const maxY = Math.max(wOther.start.y, wOther.end.y) + 10;
+        if (iy >= minY && iy <= maxY) {
+          const d = Math.abs(p.x - ix);
+          if (d < bestDist && d > 1e-3) {
+            bestDist = d; snapTo = { x: ix, y: iy };
+          }
+        }
+      } else if (wSelf.isVert && wOther.isHoriz) {
+        const ix = p.x;
+        const iy = wOther.start.y;
+        const minX = Math.min(wOther.start.x, wOther.end.x) - 10;
+        const maxX = Math.max(wOther.start.x, wOther.end.x) + 10;
+        if (ix >= minX && ix <= maxX) {
+          const d = Math.abs(p.y - iy);
+          if (d < bestDist && d > 1e-3) {
+            bestDist = d; snapTo = { x: ix, y: iy };
+          }
+        }
+      }
+    });
+
+    if (snapTo) {
+      p.x = snapTo.x;
+      p.y = snapTo.y;
+    }
+  }
+
+  // Cleanup
+  pts.forEach(p => delete p.wall);
+  walls.forEach(w => { delete w.isHoriz; delete w.isVert; });
+
+  return walls;
 }
 
 /**
@@ -109,7 +209,7 @@ function adaptWindows(rawWindows, walls) {
   // ── Step 1: Floating-window filter ───────────────────────────────────────
   // All three anchor points (start, mid, end) must be within WIN_SNAP px of
   // some wall.  If any one of them is in open space, the detection is noise.
-  const WIN_SNAP = 12; // px — tightened; backend pre-filters with distance transform
+  const WIN_SNAP = 35; // Increased snap reach to grab windows floating slightly off walls
 
   const attached = rawWindows.filter(win => {
     const sx = win.start.x, sy = win.start.y;
@@ -247,13 +347,18 @@ function adaptDoors(rawGates, walls) {
     const snap = snapToNearestWall(midX, midY, walls, 50);
     if (!snap) return;
 
-    const doorWidthWorld = Math.max(3, gate.width * SCALE);
+    const MIN_DOOR_WIDTH = 4;
+    const MAX_DOOR_WIDTH = 12;
+    const STANDARD_DOOR_HEIGHT = 9;
+
+    let doorWidthWorld = gate.width * SCALE;
+    doorWidthWorld = Math.max(MIN_DOOR_WIDTH, Math.min(MAX_DOOR_WIDTH, doorWidthWorld));
 
     results.push({
       wallIndex: snap.wallIndex + 1, // 1-based
       posT: snap.posT,
       doorWidth: doorWidthWorld,
-      doorHeight: 9,
+      doorHeight: STANDARD_DOOR_HEIGHT,
       // Preserve hinge/strike pixel coords for accurate placement
       hingeX: hinge.x,
       hingeY: hinge.y,
@@ -294,6 +399,21 @@ export async function fetchImageList() {
     console.warn('[API] Could not fetch image list:', e.message);
     return ['F1.png', 'F2.png', 'F3.png']; // fallback labels
   }
+}
+
+/**
+ * Fetch base64 2D masks for visualization.
+ */
+export async function fetch2DMasks(imageName) {
+  const url = imageName
+    ? `${API_URL.replace(/\/data$/, '/masks')}?image=${encodeURIComponent(imageName)}`
+    : API_URL.replace(/\/data$/, '/masks');
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.status !== 'success') throw new Error(`API error: ${json.message}`);
+  return json.masks;
 }
 
 /**

@@ -243,7 +243,8 @@ def find_furthest_points(pts):
 def distance_to_nearest_wall(point, wall_mask):
     dist_map = cv2.distanceTransform(cv2.bitwise_not(wall_mask), cv2.DIST_L2, 3)
     return dist_map[int(point[1]), int(point[0])]
-def detect_windows_json(image_path, headless=False):
+
+def detect_windows_json(image_path, headless=False, return_mask=False):
     # 1. LOAD IMAGES
     img = cv2.imread(image_path)
     if img is None: return []
@@ -301,10 +302,12 @@ def detect_windows_json(image_path, headless=False):
             p2 = (win["end"]["x"], win["end"]["y"])
             cv2.line(debug_img, p1, p2, (0, 0, 255), 3)
             cv2.circle(debug_img, p1, 3, (0, 255, 0), -1)
-        cv2.imshow("API_DATA_VISUAL_CHECK (RED=SENT)", debug_img)
-        cv2.waitKey(0)
+        # cv2.imshow("API_DATA_VISUAL_CHECK (RED=SENT)", debug_img)
+        # cv2.waitKey(0)
         cv2.destroyAllWindows()
     
+    if return_mask:
+        return win_pixels, windows_json
     return windows_json
 
 def classify_details(image_path='test/F3.png'):

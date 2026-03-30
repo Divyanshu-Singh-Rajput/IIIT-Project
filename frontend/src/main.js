@@ -15,7 +15,7 @@ import { createWindowOnWall } from './builders/WindowBuilder.js';
 import { createDoor, createDoorFromGate } from './builders/DoorBuilder.js';
 import {
   fetchWallData, fetchWindowData, fetchDoorData,
-  fetchImageList, setCurrentImage, clearCache,
+  fetchImageList, setCurrentImage, clearCache, fetch2DMasks
 } from './services/floorPlanApi.js';
 import { fetchMaterialAnalysis } from './services/materialApi.js';
 import { setStatus, setError } from './ui/StatusUI.js';
@@ -45,6 +45,40 @@ const { renderer } = createRenderer(container);
 // We create camera + orbit controls manually so we can also create TransformControls
 const { camera, controls: orbitControls } = createCamera(renderer);
 
+// ── Custom Fly Mode Setup ──
+const clock = new THREE.Clock();
+let isFlyMode = false;
+let flyYaw = 0;
+let flyPitch = 0;
+const flyKeys = { w: false, a: false, s: false, d: false };
+
+window.addEventListener('keydown', (e) => { if (e.key.length === 1) flyKeys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup',   (e) => { if (e.key.length === 1) flyKeys[e.key.toLowerCase()] = false; });
+
+document.getElementById('fly-mode-btn')?.addEventListener('click', (e) => {
+  isFlyMode = !isFlyMode;
+  e.target.classList.toggle('active', isFlyMode);
+  if (isFlyMode) {
+    orbitControls.enabled = false;
+    if (selectedObject) deselectObject();
+    
+    // Sync pitch/yaw to current camera orientation
+    const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+    euler.setFromQuaternion(camera.quaternion);
+    flyYaw = euler.y;
+    flyPitch = euler.x;
+    
+    setStatus("✈ Fly Mode enabled: WASD to move, Click+Drag to look");
+  } else {
+    orbitControls.enabled = true;
+    
+    // Stop any leftover movement
+    flyKeys.w = flyKeys.a = flyKeys.s = flyKeys.d = false;
+    
+    setStatus("🔄 Orbit Mode restored: Click/Drag to orbit, click objects to select");
+  }
+});
+
 setupLighting(scene);
 createGround(scene);
 setupResizeHandler(camera, renderer, container);
@@ -62,7 +96,7 @@ scene.add(transformControl);
 
 // Prevent orbit during a gizmo drag
 transformControl.addEventListener('dragging-changed', (e) => {
-  orbitControls.enabled = !e.value;
+  if (!isFlyMode) orbitControls.enabled = !e.value;
   if (e.value) {
     document.body.classList.add('transform-active');
   } else {
@@ -79,7 +113,27 @@ transformControl.addEventListener('change', () => {
 
 // ── Animation loop ──────────────────────────────────────────────────
 renderer.setAnimationLoop(() => {
-  orbitControls.update();
+  const delta = clock.getDelta();
+  
+  if (isFlyMode) {
+    // Custom WASD FPS movement
+    const speed = 100 * delta;
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    
+    // Move forward/backward
+    if (flyKeys.w) camera.position.addScaledVector(dir, speed);
+    if (flyKeys.s) camera.position.addScaledVector(dir, -speed);
+    
+    // Move left/right (strafe)
+    const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+    if (flyKeys.d) camera.position.addScaledVector(right, speed);
+    if (flyKeys.a) camera.position.addScaledVector(right, -speed);
+    
+  } else {
+    orbitControls.update();
+  }
+  
   doors.forEach(d => {
     if (d.door && typeof d.door.update === 'function') {
       d.door.update();
@@ -203,9 +257,9 @@ window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
   switch (e.key) {
-    case 'w': case 'W': setTransformMode('translate'); break;
-    case 'e': case 'E': setTransformMode('rotate');    break;
-    case 'r': case 'R': setTransformMode('scale');     break;
+    case 'w': case 'W': if (!isFlyMode) setTransformMode('translate'); break;
+    case 'e': case 'E': if (!isFlyMode) setTransformMode('rotate');    break;
+    case 'r': case 'R': if (!isFlyMode) setTransformMode('scale');     break;
     case 'Delete':
     case 'Backspace': deleteSelected(); break;
     case 'Escape': deselectObject(); break;
@@ -317,11 +371,25 @@ const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 renderer.domElement.addEventListener('pointerdown', () => { _mouseDown = true; _mouseHasMoved = false; });
-renderer.domElement.addEventListener('pointermove', () => { if (_mouseDown) _mouseHasMoved = true; });
+renderer.domElement.addEventListener('pointermove', (e) => { 
+  if (_mouseDown) {
+    _mouseHasMoved = true;
+    
+    // ── Custom FPS view dragging in Fly Mode ──
+    if (isFlyMode) {
+      flyYaw -= e.movementX * 0.003;
+      flyPitch -= e.movementY * 0.003;
+      flyPitch = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, flyPitch));
+      camera.quaternion.setFromEuler(new THREE.Euler(flyPitch, flyYaw, 0, 'YXZ'));
+    }
+  } 
+});
 let _mouseDown = false, _mouseHasMoved = false;
 
 renderer.domElement.addEventListener('pointerup', (e) => {
   _mouseDown = false;
+  
+  if (isFlyMode) return; // Prevent object selection/clicking in Fly Mode
   if (_mouseHasMoved) return; // it was a drag, not a click
 
   const rect = renderer.domElement.getBoundingClientRect();
@@ -779,13 +847,67 @@ function wireButtons() {
     }
   });
 
+  // View toggles (3D / 2D)
+  document.getElementById('view-3d-btn')?.addEventListener('click', () => switchView('3d'));
+  document.getElementById('view-2d-btn')?.addEventListener('click', () => switchView('2d'));
+
   // Image picker
-  document.getElementById('load-plan-btn')?.addEventListener('click', async () => {
-    const sel = document.getElementById('image-select');
-    const imageName = sel ? sel.value : '';
-    if (!imageName) return;
-    await loadFloorPlan(imageName);
+  const imageSelect = document.getElementById('image-select');
+  imageSelect?.addEventListener('change', (e) => {
+    const val = e.target.value;
+    if (val) loadFloorPlan(val);
   });
+  
+  document.getElementById('load-plan-btn')?.addEventListener('click', () => {
+    const val = imageSelect.value;
+    if (val) loadFloorPlan(val);
+  });
+}
+
+/**
+ * Switch between 3D viewport and 2D masks panel
+ */
+async function switchView(mode) {
+  const btn3d = document.getElementById('view-3d-btn');
+  const btn2d = document.getElementById('view-2d-btn');
+  const canvas = document.getElementById('canvas-container');
+  const panel2d = document.getElementById('2d-panel');
+  
+  if (mode === '3d') {
+    btn3d?.classList.add('active');
+    btn2d?.classList.remove('active');
+    canvas.style.display = 'block';
+    panel2d.style.display = 'none';
+  } else {
+    btn3d?.classList.remove('active');
+    btn2d?.classList.add('active');
+    canvas.style.display = 'none';
+    panel2d.style.display = 'block';
+    
+    // Load masks if we have a current image
+    const sel = document.getElementById('image-select');
+    const currentImg = sel ? sel.value : 'F3.png';
+    try {
+      showLoading('Fetching 2D Analysis Masks…');
+      const masks = await fetch2DMasks(currentImg);
+      
+      const setMask = (id, src) => {
+        const el = document.getElementById(id);
+        if (el) el.src = src || '';
+      };
+      
+      setMask('mask-original', masks.original);
+      setMask('mask-walls',    masks.walls);
+      setMask('mask-gates',    masks.gates);
+      setMask('mask-windows',  masks.windows);
+      
+    } catch (err) {
+      console.error('[2DView] Failed to load masks:', err);
+      setStatus(`Failed to load 2D masks: ${err.message}`);
+    } finally {
+      hideLoading();
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -878,6 +1000,33 @@ async function loadFloorPlan(imageName) {
       );
       orbitControls.target.copy(center);
       orbitControls.update();
+
+      // ── Build a fitted floor slab below the floorplan ──────────────────
+      const oldFloor = scene.getObjectByName('customFloor');
+      if (oldFloor) {
+        oldFloor.geometry.dispose();
+        oldFloor.material.dispose();
+        scene.remove(oldFloor);
+      }
+
+      const padding = 2; // small overhang around the walls
+      const floorGeo = new THREE.BoxGeometry(size.x + padding * 2, 0.5, size.z + padding * 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff, // White floor
+        roughness: 0.9,
+        metalness: 0.1,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
+      });
+      const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+      floorMesh.name = 'customFloor';
+      
+      // Position center X/Z, and place top surface exactly at Y=0
+      floorMesh.position.set(center.x, -0.25, center.z);
+      floorMesh.receiveShadow = true;
+      scene.add(floorMesh);
+
     }
 
     setStatus(`✓ ${imageName} · ${wallData.length} walls · ${windowData.length} windows · ${doorData.length} gates  |  Click = select · W/E/R = transform · Del = delete`);

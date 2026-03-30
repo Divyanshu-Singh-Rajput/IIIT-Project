@@ -282,3 +282,40 @@ select:focus {
 #status .error {
   color: var(--danger);
 }
+
+/* ── 2D Mask Viewer ── */
+#2d-panel {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+#2d-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+#2d-panel::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+
+.tfbtn.active {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent2) !important;
+  box-shadow: 0 0 12px rgba(61, 142, 240, 0.3);
+}
+
+.mask-card h3 {
+  margin-bottom: 12px;
+  font-family: inherit;
+}
+
+.mask-card img {
+  display: block;
+  transition: transform 0.2s ease;
+  cursor: zoom-in;
+}
+
+.mask-card img:hover {
+  transform: scale(1.02);
+}
