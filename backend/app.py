@@ -47,6 +47,38 @@ def list_images():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route('/api/upload', methods=['POST'])
+def upload_image():
+    """Upload custom floor plan, convert to png, save with random UUID."""
+    if 'image' not in request.files:
+        return jsonify({"status": "error", "message": "No image part in the request"}), 400
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+
+    try:
+        import cv2
+        import numpy as np
+        import uuid
+        
+        # Read the file to numpy array
+        file_bytes = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            return jsonify({"status": "error", "message": "Invalid image file format"}), 400
+            
+        new_filename = f"upload_{uuid.uuid4().hex[:8]}.png"
+        save_path = os.path.join(TEST_DIR, new_filename)
+        
+        # Save explicitly as .png to normalize the format
+        cv2.imwrite(save_path, img)
+        return jsonify({"status": "success", "image": new_filename}), 200
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/data')
 def get_data():
     """
@@ -356,20 +388,30 @@ def chat():
             return jsonify({"answer": "Please ask a question."}), 400
 
         # Try Gemini first
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+        except ImportError:
+            pass
+        
         api_key = os.environ.get('GEMINI_API_KEY', '')
         if api_key:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 recs = element.get('recommendations') or [{}]
                 prompt = (
                     "You are a structural engineering assistant specialising in Indian "
                     "construction materials and building codes (IS 456, IS 800).\n\n"
-                    f"Structural element:\n"
+                    f"Structural element details:\n"
                     f"  ID: {element.get('element_id', '?')}\n"
                     f"  Type: {element.get('element_type', '?').replace('_', ' ')}\n"
                     f"  Span: {element.get('span_m', '?')} m\n"
+                    f"  Area: {element.get('area_m2', '?')} m²\n"
+                    f"  Coordinates (Start): {element.get('start', '?')}\n"
+                    f"  Coordinates (End): {element.get('end', '?')}\n"
+                    f"  Length (Pixels): {element.get('length_px', '?')} px\n"
                     f"  Outer wall: {element.get('is_outer', '?')}\n"
                     f"  Top material: {recs[0].get('material', '?')}\n"
                     f"  Concerns: {'; '.join(element.get('concerns') or ['None'])}\n\n"

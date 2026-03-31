@@ -434,7 +434,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     const wallHit = wallsGroup.children.includes(hitObj) ||
       wallsGroup.children.some(g => g.children?.includes(hitObj));
 
-    if (wallHit && window._materialAnalysis && selectedObject === null) {
+    if (wallHit && window._materialAnalysis) {
       const wallId = hitObj.userData.wallId;
       const wall = walls.find(w => w.id === wallId);
       if (wall) {
