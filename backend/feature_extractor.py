@@ -26,54 +26,51 @@ def detect_walls(image_path):
         raw_lines = [l[0] for l in lines]
         merged_lines = []
 
-        # 3. SNAP TO 90 DEGREES & MERGE
-        # We sort by length so we process main walls first
-        raw_lines.sort(key=lambda l: (l[2]-l[0])**2 + (l[3]-l[1])**2, reverse=True)
+        # 3. SNAP TO 90 DEGREES & MERGE (Robust iterative pairwise merge)
+        TRACK_TOL = 5   # px: wall-thickness tolerance (same track?)
+        GAP_TOL   = 80  # px: max gap between endpoints to still merge
 
-        TRACK_TOL = 15  # px: wall-thickness tolerance (same track?)
-        GAP_TOL   = 8   # px: max gap between endpoints to still merge
-        # NOTE: old code used GAP_TOL=20 which merged collinear but separate walls
-        # in U/L/T shapes — reduced to 8px to prevent that.
-
-        while len(raw_lines) > 0:
-            l1 = raw_lines.pop(0)
-            x1, y1, x2, y2 = l1
-
-            # Force Orthogonality (Snap to 90 degrees) + normalise endpoints
-            is_h = abs(y1 - y2) < abs(x1 - x2)
-            if is_h:
-                y2 = y1
-                if x1 > x2: x1, x2 = x2, x1  # ensure x1 <= x2
+        def _should_merge(w1, w2):
+            x1_a, y1_a, x2_a, y2_a = w1
+            x1_b, y1_b, x2_b, y2_b = w2
+            is_h_a = abs(y1_a - y2_a) < abs(x1_a - x2_a)
+            is_h_b = abs(y1_b - y2_b) < abs(x1_b - x2_b)
+            if is_h_a != is_h_b: return False, None
+            
+            if is_h_a:
+                if abs(y1_a - y1_b) > TRACK_TOL: return False, None
+                lo_a, hi_a = min(x1_a, x2_a), max(x1_a, x2_a)
+                lo_b, hi_b = min(x1_b, x2_b), max(x1_b, x2_b)
+                if lo_b <= hi_a + GAP_TOL and hi_b >= lo_a - GAP_TOL:
+                    return True, [min(lo_a, lo_b), y1_a, max(hi_a, hi_b), y1_a]
             else:
-                x2 = x1
-                if y1 > y2: y1, y2 = y2, y1  # ensure y1 <= y2
+                if abs(x1_a - x1_b) > TRACK_TOL: return False, None
+                lo_a, hi_a = min(y1_a, y2_a), max(y1_a, y2_a)
+                lo_b, hi_b = min(y1_b, y2_b), max(y1_b, y2_b)
+                if lo_b <= hi_a + GAP_TOL and hi_b >= lo_a - GAP_TOL:
+                    return True, [x1_a, min(lo_a, lo_b), x1_a, max(hi_a, hi_b)]
+            return False, None
 
-            keep = True
+        merged_lines = [list(l) for l in raw_lines]
+
+        # Iterative pairwise merge
+        changed = True
+        while changed:
+            changed = False
+            new_merged = []
+            skip_indices = set()
             for i in range(len(merged_lines)):
-                mx1, my1, mx2, my2 = merged_lines[i]
-                m_is_h = abs(my1 - my2) < abs(mx1 - mx2)
-
-                if is_h != m_is_h:
-                    continue  # different orientation
-
-                if is_h:
-                    # Same direction: check they share the same Y track
-                    if abs(y1 - my1) >= TRACK_TOL:
-                        continue
-                    lo_m, hi_m = min(mx1, mx2), max(mx1, mx2)
-                    # Only merge if genuinely overlapping or touching within GAP_TOL
-                    if x1 <= hi_m + GAP_TOL and x2 >= lo_m - GAP_TOL:
-                        merged_lines[i] = [min(lo_m, x1), my1, max(hi_m, x2), my1]
-                        keep = False; break
-                else:
-                    if abs(x1 - mx1) >= TRACK_TOL:
-                        continue
-                    lo_m, hi_m = min(my1, my2), max(my1, my2)
-                    if y1 <= hi_m + GAP_TOL and y2 >= lo_m - GAP_TOL:
-                        merged_lines[i] = [mx1, min(lo_m, y1), mx1, max(hi_m, y2)]
-                        keep = False; break
-
-            if keep: merged_lines.append([x1, y1, x2, y2])
+                if i in skip_indices: continue
+                current_wall = merged_lines[i]
+                for j in range(i + 1, len(merged_lines)):
+                    if j in skip_indices: continue
+                    can_merge, merged_wall = _should_merge(current_wall, merged_lines[j])
+                    if can_merge:
+                        current_wall = merged_wall
+                        skip_indices.add(j)
+                        changed = True
+                new_merged.append(current_wall)
+            merged_lines = new_merged
 
         # 4. FORMAT INTO JSON LIST
         for idx, wall in enumerate(merged_lines):

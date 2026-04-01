@@ -11,7 +11,11 @@ def get_wall_json(image_path):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
     # 1. THRESHOLD & CLEAN
-    _, mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+    _, mask = cv2.threshold(gray, 80, 255, cv2.THRESH_BINARY_INV)
+    kernel = np.ones((3,3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     clean_mask = np.zeros_like(mask)
     for i in range(1, num_labels):
@@ -23,7 +27,7 @@ def get_wall_json(image_path):
 
     # 3. DETECT LINES
     lines = cv2.HoughLinesP(skeleton, 1, np.pi/180, threshold=20, 
-                            minLineLength=10, maxLineGap=15)
+                            minLineLength=10, maxLineGap=40)
     
     if lines is None:
         return {"project_name": "Empty Plan", "walls": []}
@@ -34,59 +38,55 @@ def get_wall_json(image_path):
     # 4. SNAP & MERGE (Remove double lines and segments)
     # Only merge segments that are on the SAME axis-track (within TRACK_TOL pixels)
     # AND genuinely overlapping or very close (within GAP_TOL pixels).
-    # Using a tight GAP_TOL prevents merging separate collinear segments that
-    # belong to different sides of U/L/T shapes.
+    # TRACK_TOL=5 handles the U/L/T fusing concern by keeping parallel offsets separate.
+    # 4. SNAP & MERGE (Robust iterative pairwise merge)
     TRACK_TOL = 5   # px: how close two parallel lines must be on their shared axis
-    GAP_TOL   = 8   # px: maximum gap between segment ends to still merge them
+    GAP_TOL   = 80  # px: maximum gap between segment ends to still merge them
 
-    while len(raw_lines) > 0:
-        l1 = raw_lines.pop(0)
-        x1, y1, x2, y2 = l1
-        is_h = abs(y1 - y2) < abs(x1 - x2)
-
-        # Snap to 90 degrees
-        if is_h:
-            y2 = y1  # force same Y
-            # Normalise so x1 <= x2
-            if x1 > x2: x1, x2 = x2, x1
+    def _should_merge(w1, w2):
+        x1_a, y1_a, x2_a, y2_a = w1
+        x1_b, y1_b, x2_b, y2_b = w2
+        is_h_a = abs(y1_a - y2_a) < abs(x1_a - x2_a)
+        is_h_b = abs(y1_b - y2_b) < abs(x1_b - x2_b)
+        if is_h_a != is_h_b: return False, None
+        
+        if is_h_a:
+            if abs(y1_a - y1_b) > TRACK_TOL: return False, None
+            lo_a, hi_a = min(x1_a, x2_a), max(x1_a, x2_a)
+            lo_b, hi_b = min(x1_b, x2_b), max(x1_b, x2_b)
+            if lo_b <= hi_a + GAP_TOL and hi_b >= lo_a - GAP_TOL:
+                return True, [min(lo_a, lo_b), y1_a, max(hi_a, hi_b), y1_a]
         else:
-            x2 = x1  # force same X
-            # Normalise so y1 <= y2
-            if y1 > y2: y1, y2 = y2, y1
+            if abs(x1_a - x1_b) > TRACK_TOL: return False, None
+            lo_a, hi_a = min(y1_a, y2_a), max(y1_a, y2_a)
+            lo_b, hi_b = min(y1_b, y2_b), max(y1_b, y2_b)
+            if lo_b <= hi_a + GAP_TOL and hi_b >= lo_a - GAP_TOL:
+                return True, [x1_a, min(lo_a, lo_b), x1_a, max(hi_a, hi_b)]
+        return False, None
 
-        merged = False
+    master_walls = []
+    # Initial insertion
+    for line in raw_lines:
+        master_walls.append(list(line))
+
+    # Iterative pairwise merge
+    changed = True
+    while changed:
+        changed = False
+        new_master = []
+        skip_indices = set()
         for i in range(len(master_walls)):
-            mx1, my1, mx2, my2 = master_walls[i]
-            m_is_h = abs(my1 - my2) < abs(mx1 - mx2)
-
-            if is_h != m_is_h:
-                continue  # different orientation
-
-            if is_h:
-                # Both horizontal: must share nearly the same Y
-                if abs(y1 - my1) > TRACK_TOL:
-                    continue
-                # Normalise master coords
-                lo_m, hi_m = min(mx1, mx2), max(mx1, mx2)
-                lo_n, hi_n = x1, x2
-                # Only merge if the segments overlap or touch within GAP_TOL
-                if lo_n <= hi_m + GAP_TOL and hi_n >= lo_m - GAP_TOL:
-                    master_walls[i] = [min(lo_m, lo_n), my1, max(hi_m, hi_n), my1]
-                    merged = True
-                    break
-            else:
-                # Both vertical: must share nearly the same X
-                if abs(x1 - mx1) > TRACK_TOL:
-                    continue
-                lo_m, hi_m = min(my1, my2), max(my1, my2)
-                lo_n, hi_n = y1, y2
-                if lo_n <= hi_m + GAP_TOL and hi_n >= lo_m - GAP_TOL:
-                    master_walls[i] = [mx1, min(lo_m, lo_n), mx1, max(hi_m, hi_n)]
-                    merged = True
-                    break
-
-        if not merged:
-            master_walls.append([x1, y1, x2, y2])
+            if i in skip_indices: continue
+            current_wall = master_walls[i]
+            for j in range(i + 1, len(master_walls)):
+                if j in skip_indices: continue
+                can_merge, merged_wall = _should_merge(current_wall, master_walls[j])
+                if can_merge:
+                    current_wall = merged_wall
+                    skip_indices.add(j)
+                    changed = True
+            new_master.append(current_wall)
+        master_walls = new_master
 
     # ── 5. CORNER SNAPPING ────────────────────────────────────────────────────
     # After merge, endpoints of adjacent walls are often 5-15 px apart, creating
