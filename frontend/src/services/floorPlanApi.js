@@ -348,8 +348,11 @@ function adaptDoors(rawGates, walls) {
     const midX = (hinge.x + strike.x) / 2;
     const midY = (hinge.y + strike.y) / 2;
 
-    const snap = snapToNearestWall(midX, midY, walls, 50);
-    if (!snap) return;
+    const snap = snapToNearestWall(midX, midY, walls, 500); // Relaxed max dist
+    if (!snap) {
+      console.warn('Dropped gate due to no near wall:', gate);
+      return;
+    }
 
     const MIN_DOOR_WIDTH = 4;
     const MAX_DOOR_WIDTH = 12;

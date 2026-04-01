@@ -56,3 +56,13 @@ lerna-debug.log*
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Project-specific Ignores
+backend/*.png
+backend/*.json
+backend/*.txt
+!backend/test/*.png
+!backend/floor_plan_data.json
+!backend/out.json
+!backend/gate_detector.py
+!backend/wall_detector.py

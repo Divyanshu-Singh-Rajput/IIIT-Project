@@ -10,8 +10,8 @@ try:
 except ImportError:
     pass  # python-dotenv not installed — use real env vars instead
 
-from turtle_test import get_wall_json
-from t import get_final_gate_data, detect_windows_json
+from wall_detector import get_wall_json
+from feature_extractor import get_final_gate_data, detect_windows_json
 
 
 app = Flask(__name__)
@@ -113,7 +113,7 @@ def get_masks():
     """
     import cv2
     import base64
-    from t import detect_walls, detect_gates_robust
+    from feature_extractor import detect_walls, detect_gates_robust
     
     def img_to_b64(img):
         if img is None: return ""
