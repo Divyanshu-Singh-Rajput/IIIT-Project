@@ -1,5 +1,12 @@
 // src/config/constants.js
 
+// The 3D world width (in Three.js units) that every floor plan is normalised to.
+// All pixel coordinates are divided by the image width and multiplied by this
+// value, so plans of any resolution always fill the same viewport.
+export const TARGET_WORLD_SIZE = 200;
+
+// Legacy alias kept so any file that still imports SCALE gets a sensible default.
+// Remove once every caller has migrated to the dynamic scale from floorPlanApi.
 export const SCALE = 0.2;
 export const WALL_HEIGHT = 12;
 export const WALL_THICKNESS = 1.2;

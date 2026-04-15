@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { rebuildWallWithOpenings } from '../builders/WallBuilder.js';
 import { createWindowOnWall } from '../builders/WindowBuilder.js';
 import { createDoor } from '../builders/DoorBuilder.js';
-import { SCALE, WALL_HEIGHT, WALL_THICKNESS } from '../config/constants.js';
+import { WALL_HEIGHT, WALL_THICKNESS } from '../config/constants.js';
+// Note: SCALE is not imported. The per-image `scale` is injected via setScale().
 
 export class EntityManager {
   constructor(scene, wallsGroup, windowsGroup, gatesGroup, state, ui) {
@@ -13,7 +14,12 @@ export class EntityManager {
     this.gatesGroup = gatesGroup;
     this.state = state;
     this.ui = ui; // Error/Status UI
+    // Per-image px→world scale factor. Updated by setScale() before each load.
+    this.scale = 0.2;
   }
+
+  /** Set the dynamic px→world scale for the currently loaded floor plan. */
+  setScale(s) { this.scale = s; }
 
   openingsForWall(wallId) {
     const winOps = this.state.windows
@@ -33,7 +39,7 @@ export class EntityManager {
 
     w.meshes.forEach(m => this.wallsGroup.remove(m));
 
-    const newMeshes = rebuildWallWithOpenings(this.scene, { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 }, [], this.openingsForWall(wallId));
+    const newMeshes = rebuildWallWithOpenings(this.scene, { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 }, [], this.openingsForWall(wallId), this.scale);
     newMeshes.forEach(m => {
       this.scene.remove(m);
       m.userData.wallId = wallId;
@@ -49,7 +55,7 @@ export class EntityManager {
     const wall = { id, x1, y1, x2, y2, meshes: [] };
     this.state.walls.push(wall);
 
-    const rawMeshes = rebuildWallWithOpenings(this.scene, wall, [], []);
+    const rawMeshes = rebuildWallWithOpenings(this.scene, wall, [], [], this.scale);
     rawMeshes.forEach(m => {
       this.scene.remove(m);
       m.userData.wallId = id;
@@ -90,7 +96,7 @@ export class EntityManager {
     const wall = this.state.walls.find(w => w.id === wallId);
     if (!wall) return;
     const id = ++this.state.winIdCounter;
-    const group = createWindowOnWall(this.scene, wall, { posT, winWidth, winHeight, sillHeight });
+    const group = createWindowOnWall(this.scene, wall, { posT, winWidth, winHeight, sillHeight, scale: this.scale });
     this.scene.remove(group);
     group.userData.layer = 'window';
     group.userData.winId = id;
@@ -120,7 +126,7 @@ export class EntityManager {
     if (!wall) return;
     const id = ++this.state.doorIdCounter;
     const label = `Door ${id} (W${wallId})`;
-    const door = createDoor(this.scene, wall, { posT, doorWidth, doorHeight, label });
+    const door = createDoor(this.scene, wall, { posT, doorWidth, doorHeight, label, scale: this.scale });
     
     if (door.frameGroup) { 
         this.scene.remove(door.frameGroup); 
@@ -169,7 +175,7 @@ export class EntityManager {
     
     const wall = this.state.walls.find(w => w.id === wd.wallId);
     const group = createWindowOnWall(this.scene, wall, {
-      posT: wd.posT, winWidth: wd.winWidth, winHeight: wd.winHeight, sillHeight: wd.sillHeight,
+      posT: wd.posT, winWidth: wd.winWidth, winHeight: wd.winHeight, sillHeight: wd.sillHeight, scale: this.scale,
     });
     this.scene.remove(group);
     group.userData.layer = 'window';
@@ -182,10 +188,10 @@ export class EntityManager {
   }
 
   buildSimpleGate(gateData, gateId) {
-    const hx = gateData.hingeX * SCALE;
-    const hz = gateData.hingeY * SCALE;
-    const sx = gateData.strikeX * SCALE;
-    const sz = gateData.strikeY * SCALE;
+    const hx = gateData.hingeX * this.scale;
+    const hz = gateData.hingeY * this.scale;
+    const sx = gateData.strikeX * this.scale;
+    const sz = gateData.strikeY * this.scale;
     const dx = sx - hx, dz = sz - hz;
     const doorWidth = Math.sqrt(dx * dx + dz * dz);
 

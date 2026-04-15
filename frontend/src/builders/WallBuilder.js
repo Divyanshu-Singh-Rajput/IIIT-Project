@@ -1,6 +1,9 @@
 // src/builders/WallBuilder.js
 import * as THREE from 'three';
-import { SCALE, WALL_HEIGHT, WALL_THICKNESS, MATERIALS } from '../config/constants.js';
+import { WALL_HEIGHT, WALL_THICKNESS, MATERIALS } from '../config/constants.js';
+// Note: SCALE is intentionally NOT imported here. The caller passes a `scale`
+// parameter so every floor plan is rendered at a consistent world size regardless
+// of the pixel resolution of the source image.
 
 // Reuse a single material across all walls for better performance
 const wallMaterial = new THREE.MeshStandardMaterial({
@@ -59,11 +62,12 @@ function makeWallSegment(scene, ox, oz, angle, localStart, localEnd, yBottom, yT
  * @param {THREE.Scene} scene
  * @param {{ x: number, y: number }} start
  * @param {{ x: number, y: number }} end
+ * @param {number} [scale=0.2]  px→world scale factor (dynamic, per-image)
  * @returns {THREE.Mesh[]}
  */
-export function createWall(scene, start, end) {
-  const x1 = start.x * SCALE, z1 = start.y * SCALE;
-  const x2 = end.x   * SCALE, z2 = end.y   * SCALE;
+export function createWall(scene, start, end, scale = 0.2) {
+  const x1 = start.x * scale, z1 = start.y * scale;
+  const x2 = end.x   * scale, z2 = end.y   * scale;
   const dx = x2 - x1, dz = z2 - z1;
   const L  = Math.sqrt(dx * dx + dz * dz);
   if (L < 0.1) return [];
@@ -78,9 +82,10 @@ export function createWall(scene, start, end) {
  *
  * @param {THREE.Scene} scene
  * @param {Array<{ start: { x, y }, end: { x, y } }>} wallData
+ * @param {number} [scale=0.2]
  */
-export function buildWalls(scene, wallData) {
-  wallData.forEach(({ start, end }) => createWall(scene, start, end));
+export function buildWalls(scene, wallData, scale = 0.2) {
+  wallData.forEach(({ start, end }) => createWall(scene, start, end, scale));
 }
 
 /**
@@ -92,15 +97,16 @@ export function buildWalls(scene, wallData) {
  * @param {THREE.Mesh[]} oldMeshes  – existing meshes to remove
  * @param {Array<{posT: number, winWidth: number, winHeight: number, sillHeight: number}>} openings
  *   All dimensions in WORLD units (already scaled); posT is 0-1 along the wall.
+ * @param {number} [scale=0.2]  px→world scale factor
  * @returns {THREE.Mesh[]}  new mesh list
  */
-export function rebuildWallWithOpenings(scene, wallInfo, oldMeshes, openings) {
+export function rebuildWallWithOpenings(scene, wallInfo, oldMeshes, openings, scale = 0.2) {
   // ── Remove old meshes ──
   oldMeshes.forEach(m => scene.remove(m));
 
   // ── Wall geometry in scaled world space ──
-  const x1 = wallInfo.x1 * SCALE, z1 = wallInfo.y1 * SCALE;
-  const x2 = wallInfo.x2 * SCALE, z2 = wallInfo.y2 * SCALE;
+  const x1 = wallInfo.x1 * scale, z1 = wallInfo.y1 * scale;
+  const x2 = wallInfo.x2 * scale, z2 = wallInfo.y2 * scale;
   const dx = x2 - x1, dz = z2 - z1;
   const L  = Math.sqrt(dx * dx + dz * dz);
   if (L < 0.1) return [];

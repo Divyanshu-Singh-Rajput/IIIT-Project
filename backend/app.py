@@ -12,6 +12,7 @@ except ImportError:
 
 from wall_detector import get_wall_json
 from feature_extractor import get_final_gate_data, detect_windows_json
+from floor_plan_analyzer import preprocess_floor_plan
 
 
 app = Flask(__name__)
@@ -89,16 +90,27 @@ def get_data():
         image_name = request.args.get('image', '')
         image_path = get_image_path(image_name)
 
-        walls_data = get_wall_json(image_path)
-        windows    = detect_windows_json(image_path, headless=True)
-        _, gates   = get_final_gate_data(image_path)   # returns hinge/strike format
+        # Stage 1: Pre-process raw image into a clean floor plan
+        try:
+            clean_path = preprocess_floor_plan(image_path)
+        except Exception as pre_err:
+            print(f"[Stage1] Pre-processing failed, using raw image: {pre_err}")
+            clean_path = image_path
+
+        # Stage 2: Run existing detectors on the clean image
+        walls_data = get_wall_json(clean_path)
+        windows    = detect_windows_json(clean_path, headless=True)
+        _, gates   = get_final_gate_data(clean_path)   # returns hinge/strike format
+
+        image_size = (walls_data.get("project_info") or {}).get("image_size") or {}
 
         return jsonify({
-            "status":  "success",
-            "image":   os.path.basename(image_path),
-            "data":    walls_data,
-            "windows": windows,
-            "gates":   gates,
+            "status":     "success",
+            "image":      os.path.basename(image_path),
+            "image_size": image_size,   # {width, height} in pixels
+            "data":       walls_data,
+            "windows":    windows,
+            "gates":      gates,
         })
     except FileNotFoundError as e:
         return jsonify({"status": "error", "message": str(e)}), 404
@@ -126,17 +138,23 @@ def get_masks():
         image_name = request.args.get('image', '')
         image_path = get_image_path(image_name)
 
+        # Stage 1: Pre-process
+        try:
+            clean_path = preprocess_floor_plan(image_path)
+        except Exception:
+            clean_path = image_path
+
         # Original Image
         original = cv2.imread(image_path)
         
         # Walls
-        wall_mask, _ = detect_walls(image_path)
+        wall_mask, _ = detect_walls(clean_path)
         
         # Gates
-        gate_mask, _ = detect_gates_robust(image_path)
+        gate_mask, _ = detect_gates_robust(clean_path)
         
         # Windows
-        win_mask, _ = detect_windows_json(image_path, headless=True, return_mask=True)
+        win_mask, _ = detect_windows_json(clean_path, headless=True, return_mask=True)
 
         return jsonify({
             "status": "success",

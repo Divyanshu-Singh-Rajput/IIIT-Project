@@ -1,6 +1,7 @@
 // src/builders/DoorBuilder.js
 import * as THREE from 'three';
-import { SCALE, WALL_HEIGHT, WALL_THICKNESS } from '../config/constants.js';
+import { WALL_HEIGHT, WALL_THICKNESS } from '../config/constants.js';
+// SCALE intentionally not imported — caller passes `scale` per-image.
 
 // ─── Materials ─────────────────────────────────────────────────────────────────
 
@@ -57,15 +58,16 @@ export function createDoorFromGate(scene, gateData) {
     doorHeight = 9,
     swingDir = 1,
     label = 'Door',
+    scale = 0.2,   // px→world scale factor
   } = gateData;
 
   // ── World-space hinge position ──
-  const hx = hingeX * SCALE;
-  const hz = hingeY * SCALE;
+  const hx = hingeX * scale;
+  const hz = hingeY * scale;
 
   // ── Direction of the door leaf (hinge → strike in pixel space) ──
-  const rawDx = (strikeX - hingeX) * SCALE;
-  const rawDz = (strikeY - hingeY) * SCALE;
+  const rawDx = (strikeX - hingeX) * scale;
+  const rawDz = (strikeY - hingeY) * scale;
   // wallAngle is the angle of the door leaf from hinge to strike
   const wallAngle = Math.atan2(rawDz, rawDx);
 
@@ -200,10 +202,11 @@ export function createDoor(scene, wallSeg, opts = {}) {
     doorHeight = 9,
     swingDir = 1,
     label = 'Door',
+    scale = 0.2,   // px→world scale factor
   } = opts;
 
-  const x1 = wallSeg.x1 * SCALE, z1 = wallSeg.y1 * SCALE;
-  const x2 = wallSeg.x2 * SCALE, z2 = wallSeg.y2 * SCALE;
+  const x1 = wallSeg.x1 * scale, z1 = wallSeg.y1 * scale;
+  const x2 = wallSeg.x2 * scale, z2 = wallSeg.y2 * scale;
   const dx = x2 - x1, dz = z2 - z1;
   const L = Math.sqrt(dx * dx + dz * dz);
   const wallAngle = Math.atan2(dz, dx);
@@ -216,14 +219,15 @@ export function createDoor(scene, wallSeg, opts = {}) {
   // Delegate to the gate-based factory using computed hinge/strike in world space,
   // converting back to pixel-equivalent coords since createDoorFromGate accepts pixels.
   return createDoorFromGate(scene, {
-    hingeX: hx / SCALE,
-    hingeY: hz / SCALE,
-    strikeX: (hx + cosA * doorWidth) / SCALE,
-    strikeY: (hz + sinA * doorWidth) / SCALE,
+    hingeX: hx / scale,
+    hingeY: hz / scale,
+    strikeX: (hx + cosA * doorWidth) / scale,
+    strikeY: (hz + sinA * doorWidth) / scale,
     doorWidth,
     doorHeight,
     swingDir,
     label,
+    scale,
   });
 }
 

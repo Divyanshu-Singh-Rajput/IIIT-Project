@@ -1,6 +1,7 @@
 // src/builders/WindowBuilder.js
 import * as THREE from 'three';
-import { SCALE, WALL_HEIGHT, WALL_THICKNESS } from '../config/constants.js';
+import { WALL_HEIGHT, WALL_THICKNESS } from '../config/constants.js';
+// SCALE intentionally not imported — caller passes `scale` per-image.
 
 // ─── Materials ─────────────────────────────────────────────────────────────────
 
@@ -48,11 +49,12 @@ export function createWindowOnWall(scene, wallSeg, opts = {}) {
     winWidth   = 20,
     winHeight  = 8,
     sillHeight = 3,
+    scale      = 0.2,   // px→world scale factor (per-image, from EntityManager)
   } = opts;
 
   // ── Wall geometry in scaled world space ──
-  const x1 = wallSeg.x1 * SCALE, z1 = wallSeg.y1 * SCALE;
-  const x2 = wallSeg.x2 * SCALE, z2 = wallSeg.y2 * SCALE;
+  const x1 = wallSeg.x1 * scale, z1 = wallSeg.y1 * scale;
+  const x2 = wallSeg.x2 * scale, z2 = wallSeg.y2 * scale;
   const dx = x2 - x1, dz = z2 - z1;
   const wallAngle = Math.atan2(dz, dx);
 

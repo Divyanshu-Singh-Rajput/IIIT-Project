@@ -161,17 +161,24 @@ def get_wall_json(image_path):
             for k in range(len(pts)):
                 p1 = pts[k]
                 p2 = pts[(k + 1) % len(pts)]
-                # Snap each edge to 90° (floor plans are rectilinear)
                 dx_e = abs(p2[0] - p1[0])
                 dy_e = abs(p2[1] - p1[1])
-                if dx_e >= dy_e:
-                    # horizontal: lock Y to average
+
+                # Compute angle in degrees (0 = horizontal, 90 = vertical)
+                import math
+                angle_deg = math.degrees(math.atan2(dy_e, dx_e)) if (dx_e + dy_e) > 0 else 0
+
+                if angle_deg < 15:
+                    # Near-horizontal: snap Y to average
                     mid_y = int(round((p1[1] + p2[1]) / 2))
                     edge  = [min(p1[0], p2[0]), mid_y, max(p1[0], p2[0]), mid_y]
-                else:
-                    # vertical: lock X to average
+                elif angle_deg > 75:
+                    # Near-vertical: snap X to average
                     mid_x = int(round((p1[0] + p2[0]) / 2))
                     edge  = [mid_x, min(p1[1], p2[1]), mid_x, max(p1[1], p2[1])]
+                else:
+                    # Diagonal wall — keep at true angle (do NOT force to H/V)
+                    edge = [int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1])]
 
                 edge_len = int(((edge[2]-edge[0])**2 + (edge[3]-edge[1])**2)**0.5)
                 if edge_len < 10:

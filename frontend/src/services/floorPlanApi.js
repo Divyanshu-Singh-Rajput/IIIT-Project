@@ -1,8 +1,12 @@
 // src/services/floorPlanApi.js
 // Real backend integration with coordinate adapter.
 // Converts raw OpenCV pixel coordinates → Three.js world units.
+//
+// KEY: every floor plan is normalised to TARGET_WORLD_SIZE world-units wide,
+// regardless of the image's pixel resolution. This prevents stretch/shrink
+// when switching between high-res and low-res floor plan images.
 
-import { API_URL, SCALE } from '../config/constants.js';
+import { API_URL, TARGET_WORLD_SIZE } from '../config/constants.js';
 
 // ─── Pixel → World helpers ────────────────────────────────────────────────────
 
@@ -60,24 +64,32 @@ function snapToNearestWall(midX, midY, walls, maxDist = 30) {
  * Backend: { walls: [{ start:{x,y}, end:{x,y}, length }] }
  * Frontend: [{ start:{x,y}, end:{x,y} }]  (same structure, just the array)
  */
-function adaptWalls(data) {
+function adaptWalls(data, scale) {
   let walls = (data.walls || []).map(w => ({
     start: { x: w.start.x, y: w.start.y },
-    end: { x: w.end.x, y: w.end.y },
+    end:   { x: w.end.x,   y: w.end.y   },
   }));
 
-  // 0. Orthogonal tag & enforce
+  // 0. Orthogonal tag & enforce — but SKIP for diagonal walls
   walls.forEach(w => {
     const dx = Math.abs(w.end.x - w.start.x);
     const dy = Math.abs(w.end.y - w.start.y);
-    if (dx > dy) {
+    // Compute angle: 0° = horizontal, 90° = vertical
+    const angleDeg = (dx + dy > 0) ? Math.atan2(dy, dx) * (180 / Math.PI) : 0;
+
+    if (angleDeg < 15) {
+      // Near-horizontal → snap Y
       w.isHoriz = true;
       const avgY = (w.start.y + w.end.y) / 2;
       w.start.y = w.end.y = avgY;
-    } else {
+    } else if (angleDeg > 75) {
+      // Near-vertical → snap X
       w.isVert = true;
       const avgX = (w.start.x + w.end.x) / 2;
       w.start.x = w.end.x = avgX;
+    } else {
+      // Diagonal wall (e.g. 45°) → keep true angle, skip H/V snapping
+      w.isDiag = true;
     }
   });
 
@@ -164,9 +176,24 @@ function adaptWalls(data) {
     }
   }
 
+  // 1b. Simple distance-based snap for diagonal endpoints
+  //     (The H/V-specific corner snap above skips diag walls, so do a generic merge)
+  for (let i = 0; i < pts.length; i++) {
+    if (!pts[i].wall.isDiag) continue;
+    for (let j = 0; j < pts.length; j++) {
+      if (i === j || pts[i].wall === pts[j].wall) continue;
+      if (dist(pts[i], pts[j]) < CORNER_SNAP) {
+        const mx = (pts[i].x + pts[j].x) / 2;
+        const my = (pts[i].y + pts[j].y) / 2;
+        pts[i].x = pts[j].x = mx;
+        pts[i].y = pts[j].y = my;
+      }
+    }
+  }
+
   // Cleanup
   pts.forEach(p => delete p.wall);
-  walls.forEach(w => { delete w.isHoriz; delete w.isVert; });
+  walls.forEach(w => { delete w.isHoriz; delete w.isVert; delete w.isDiag; });
 
   return walls;
 }
@@ -195,7 +222,7 @@ function adaptWalls(data) {
  *    rendered edges still overlap or are < MIN_GAP world units apart
  *    are culled left → right.
  */
-function adaptWindows(rawWindows, walls) {
+function adaptWindows(rawWindows, walls, scale) {
   // ── Shared helpers ────────────────────────────────────────────────────────
 
   /** Minimum distance from a pixel point to the nearest wall line. */
@@ -288,12 +315,12 @@ function adaptWindows(rawWindows, walls) {
     const wall = walls[snap.wallIndex];
     const dx = wall.end.x - wall.start.x;
     const dy = wall.end.y - wall.start.y;
-    const wallLenWorld = Math.sqrt(dx * dx + dy * dy) * SCALE;
+    const wallLenWorld = Math.sqrt(dx * dx + dy * dy) * scale;
 
     raw.push({
       wallIndex: snap.wallIndex + 1,
-      posT: snap.posT,
-      winWidth: Math.max(2, win.width * SCALE),
+      posT:      snap.posT,
+      winWidth:  Math.max(2, win.width * scale),
       winHeight: 7,
       sillHeight: 3,
       _wallLenWorld: wallLenWorld,
@@ -336,7 +363,7 @@ function adaptWindows(rawWindows, walls) {
  * doorWidth  = gate.width * SCALE
  * doorHeight = fixed 9 world units (~standard door)
  */
-function adaptDoors(rawGates, walls) {
+function adaptDoors(rawGates, walls, scale) {
   const results = [];
 
   rawGates.forEach(gate => {
@@ -358,7 +385,7 @@ function adaptDoors(rawGates, walls) {
     const MAX_DOOR_WIDTH = 12;
     const STANDARD_DOOR_HEIGHT = 9;
 
-    let doorWidthWorld = gate.width * SCALE;
+    let doorWidthWorld = gate.width * scale;
     doorWidthWorld = Math.max(MIN_DOOR_WIDTH, Math.min(MAX_DOOR_WIDTH, doorWidthWorld));
 
     results.push({
@@ -439,11 +466,23 @@ export async function fetchFloorPlanData(imageName) {
   const json = await res.json();
   if (json.status !== 'success') throw new Error(`API error: ${json.message}`);
 
-  const walls = adaptWalls(json.data);
-  const windows = adaptWindows(json.windows || [], walls);
-  const doors = adaptDoors(json.gates || [], walls);
+  // ── Compute dynamic scale ─────────────────────────────────────────────────
+  // Normalise all pixel coordinates to TARGET_WORLD_SIZE world-units.
+  // imageWidth comes from the backend; fall back to a reasonable default so
+  // the app still works if an older backend omits the field.
+  const imageWidth  = (json.image_size && json.image_size.width)  || 800;
+  const imageHeight = (json.image_size && json.image_size.height) || 800;
+  const scale = TARGET_WORLD_SIZE / imageWidth;
 
-  return { walls, windows, doors };
+  // Keep aspect ratio — walls use X/Y pixel coords, so scale is uniform.
+  // (imageHeight is stored for reference / future use.)
+  void imageHeight;
+
+  const walls   = adaptWalls(json.data, scale);
+  const windows = adaptWindows(json.windows || [], walls, scale);
+  const doors   = adaptDoors(json.gates   || [], walls, scale);
+
+  return { walls, windows, doors, scale };
 }
 
 // ─── Legacy per-resource exports (kept for backward compatibility) ─────────────

@@ -6,7 +6,7 @@ import { InputManager } from './core/InputManager.js';
 import { UIManager } from './ui/UIManager.js';
 import { state } from './state.js';
 import {
-  fetchWallData, fetchWindowData, fetchDoorData,
+  fetchFloorPlanData,
   fetchImageList, setCurrentImage, clearCache, fetch2DMasks
 } from './services/floorPlanApi.js';
 import { fetchMaterialAnalysis } from './services/materialApi.js';
@@ -96,11 +96,14 @@ async function loadFloorPlan(imageName) {
   setCurrentImage(imageName);
 
   try {
-    const [wallData, windowData, doorData] = await Promise.all([
-      fetchWallData(imageName),
-      fetchWindowData(imageName),
-      fetchDoorData(imageName),
-    ]);
+    // fetchFloorPlanData returns { walls, windows, doors, scale }
+    // `scale` = TARGET_WORLD_SIZE / imageWidth — normalises every plan to the
+    // same viewport regardless of the source image's pixel resolution.
+    const { walls: wallData, windows: windowData, doors: doorData, scale } =
+      await fetchFloorPlanData(imageName);
+
+    // Inject the per-image scale BEFORE any mesh is built
+    entityManager.setScale(scale);
 
     wallData.forEach(seg => entityManager.addWall(seg.start.x, seg.start.y, seg.end.x, seg.end.y));
 
@@ -119,7 +122,7 @@ async function loadFloorPlan(imageName) {
       } else {
         const wall = state.walls[d.wallIndex - 1];
         if (!wall) return;
-        const door = createDoor(scene, wall, { posT: d.posT, doorWidth: d.doorWidth, doorHeight: d.doorHeight, swingDir: d.swingDir ?? 1, label: `Gate ${id}` });
+        const door = createDoor(scene, wall, { posT: d.posT, doorWidth: d.doorWidth, doorHeight: d.doorHeight, swingDir: d.swingDir ?? 1, label: `Gate ${id}`, scale });
         if (door.frameGroup) { scene.remove(door.frameGroup); door.frameGroup.userData.layer = 'gate'; door.frameGroup.userData.gateId = id; gatesGroup.add(door.frameGroup); }
         if (door.doorRoot)   { scene.remove(door.doorRoot);   door.doorRoot.userData.layer   = 'gate'; door.doorRoot.userData.gateId   = id; gatesGroup.add(door.doorRoot);   }
         if (door.panelMesh)  { door.panelMesh.userData.layer = 'gate'; door.panelMesh.userData.gateId = id; }
