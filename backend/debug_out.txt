@@ -1,0 +1,5 @@
+﻿F3 h=904 w=980 diag=1333
+max_sep=46
+kernel sizes: v_height=22 h_width=24
+win_pix nonzero: 885
+Hough lines: 15  threshold=13 minLen=15
